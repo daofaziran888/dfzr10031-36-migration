@@ -74,3 +74,29 @@ npm run dev
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 审计时间迁移
+
+审计记录的 `操作时间` 历史上是文本。`backend/app/services/audit_time_migration.py`
+提供迁移流水线：在迁移环境构建 SQLite 兼容数据库（默认 `backend/data/audit_time_compat.db`，
+可用 `AUDIT_TIME_COMPAT_DB` 覆盖），把旧文本换算成可按时区排序的新版记录，
+同时保留原始文本与旧读取方式（`/api/audit` 及其导出不受影响）。
+
+- 精度分级：带偏移量 → `absolute`（可换算为绝对时间）；纯日期 → `day`
+  （可确定到日）；本地时间无时区 / 缺失 → 进迁移未决清单，绝不混入已确认的
+  绝对时间序列。同一操作地迟到的午夜记录对采用**先切换可解析记录**策略，
+  未决记录不阻塞同组已确认记录。
+- 同一操作编号重复迁移幂等；已确认的换算证据不会被回填失败后的重试改写；
+  换算前后的来源可通过 `source_hash` / `evidence_hash` 核实。
+- 迁移按批次发布，某批解析失效可整批回滚；旧清单操作顺序（`source_seq`）
+  始终保留，回滚后仍可核对。
+- 接口：`POST /api/audit/time-migration/run`（整体迁移）、`POST .../entries`
+  （单条录入）、`POST .../rollback`（回滚）、`GET .../index`（兼容索引）、
+  `GET .../snapshot-view`（数据快照消费：日序列 + 迁移未决清单 + 合计）、
+  `GET .../legacy-order`（旧清单顺序与旧材料日计数）、`GET .../batches`。
+
+端到端验证（换算、重跑幂等、回滚前后的快照合计，纯标准库即可运行）：
+
+```bash
+python3 backend/scripts/verify_audit_time_migration.py
+```
